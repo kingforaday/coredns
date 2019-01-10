@@ -11,6 +11,7 @@ The default location for the metrics is `localhost:9153`. The metrics path is fi
 The following metrics are exported:
 
 * `coredns_build_info{version, revision, goversion}` - info about CoreDNS itself.
+* `coredns_panic_count_total{}` - total number of panics.
 * `coredns_dns_request_count_total{server, zone, proto, family}` - total query count.
 * `coredns_dns_request_duration_seconds{server, zone}` - duration to process each query.
 * `coredns_dns_request_size_bytes{server, zone, proto}` - size of the request in bytes.
@@ -59,7 +60,7 @@ Use an alternative address:
 }
 ~~~
 
-Or via an enviroment variable (this is supported throughout the Corefile): `export PORT=9253`, and
+Or via an environment variable (this is supported throughout the Corefile): `export PORT=9253`, and
 then:
 
 ~~~ corefile
@@ -70,5 +71,7 @@ then:
 
 ## Bugs
 
-When reloading, we keep the handler running, meaning that any changes to the handler's address
-aren't picked up. You'll need to restart CoreDNS for that to happen.
+When reloading, the Prometheus handler is stopped before the new server instance is started.
+If that new server fails to start, then the initial server instance is still available and DNS queries still served,
+but Prometheus handler stays down.
+Prometheus will not reply HTTP request until a successful reload or a complete restart of CoreDNS.

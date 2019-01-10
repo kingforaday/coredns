@@ -2,9 +2,12 @@
 
 ## Name
 
-*reload* - allows automatic reload of a changed Corefile
+*reload* - allows automatic reload of a changed Corefile.
 
 ## Description
+
+This plugin allows automatic reload of a changed _Corefile_.
+To enable automatic reloading of _zone file_ changes, use the `auto` plugin.
 
 This plugin periodically checks if the Corefile has changed by reading
 it and calculating its MD5 checksum. If the file has changed, it reloads
@@ -81,7 +84,7 @@ is already listening on that port. The process reloads and performs the followin
 3. fail to start a new listener on 443
 4. fail loading the new Corefile, abort and keep using the old process
 
-After the aborted attempt to reload we are left with the old proceses running, but the listener is
+After the aborted attempt to reload we are left with the old processes running, but the listener is
 closed in step 1; so the health endpoint is broken. The same can hopen in the prometheus metrics plugin.
 
 In general be careful with assigning new port and expecting reload to work fully.

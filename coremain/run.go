@@ -19,7 +19,6 @@ import (
 )
 
 func init() {
-	caddy.TrapSignals()
 	caddy.DefaultConfigFile = "Corefile"
 	caddy.Quiet = true // don't show init stuff from caddy
 	setVersion()
@@ -30,7 +29,6 @@ func init() {
 	flag.StringVar(&caddy.PidFile, "pidfile", "", "Path to write pid file")
 	flag.BoolVar(&version, "version", false, "Show version")
 	flag.BoolVar(&dnsserver.Quiet, "quiet", false, "Quiet mode (no initialization output)")
-	flag.BoolVar(&logfile, "log", false, "Log to standard output")
 
 	caddy.RegisterCaddyfileLoader("flag", caddy.LoaderFunc(confLoader))
 	caddy.SetDefaultCaddyfileLoader("default", caddy.LoaderFunc(defaultLoader))
@@ -41,8 +39,10 @@ func init() {
 
 // Run is CoreDNS's main() function.
 func Run() {
+	caddy.TrapSignals()
+
 	// Reset flag.CommandLine to get rid of unwanted flags for instance from glog (used in kubernetes).
-	// And readd the once we want to keep.
+	// And read the ones we want to keep.
 	flag.VisitAll(func(f *flag.Flag) {
 		if _, ok := flagsBlacklist[f.Name]; ok {
 			return
@@ -61,11 +61,8 @@ func Run() {
 		mustLogFatal(fmt.Errorf("extra command line arguments: %s", flag.Args()))
 	}
 
-	// Set up process log before anything bad happens
-	if logfile {
-		log.SetOutput(os.Stdout)
-	}
-	log.SetFlags(log.LstdFlags)
+	log.SetOutput(os.Stdout)
+	log.SetFlags(0) // Set to 0 because we're doing our own time, with timezone
 
 	if version {
 		showVersion()
@@ -260,14 +257,14 @@ var (
 )
 
 // flagsBlacklist removes flags with these names from our flagset.
-var flagsBlacklist = map[string]bool{
-	"logtostderr":      true,
-	"alsologtostderr":  true,
-	"v":                true,
-	"stderrthreshold":  true,
-	"vmodule":          true,
-	"log_backtrace_at": true,
-	"log_dir":          true,
+var flagsBlacklist = map[string]struct{}{
+	"logtostderr":      struct{}{},
+	"alsologtostderr":  struct{}{},
+	"v":                struct{}{},
+	"stderrthreshold":  struct{}{},
+	"vmodule":          struct{}{},
+	"log_backtrace_at": struct{}{},
+	"log_dir":          struct{}{},
 }
 
 var flagsToKeep []*flag.Flag

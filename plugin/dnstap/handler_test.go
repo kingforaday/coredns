@@ -42,7 +42,7 @@ func (w *writer) Dnstap(e tap.Dnstap) {
 		w.t.Error("Message not expected.")
 	}
 	if !test.MsgEqual(w.queue[0], e.Message) {
-		w.t.Errorf("want: %v, have: %v", w.queue[0], e.Message)
+		w.t.Errorf("Want: %v, have: %v", w.queue[0], e.Message)
 	}
 	w.queue = w.queue[1:]
 }
@@ -103,7 +103,7 @@ func TestError(t *testing.T) {
 	// the dnstap error will show only if there is no plugin error
 	_, err := h.ServeDNS(context.TODO(), rw, nil)
 	if err == nil || !strings.HasPrefix(err.Error(), "plugin/dnstap") {
-		t.Fatal("must return the dnstap error but have:", err)
+		t.Fatal("Must return the dnstap error but have:", err)
 	}
 
 	// plugin errors will always overwrite dnstap errors
@@ -111,6 +111,6 @@ func TestError(t *testing.T) {
 	h.Next = endWith(0, pluginErr)
 	_, err = h.ServeDNS(context.TODO(), rw, nil)
 	if err != pluginErr {
-		t.Fatal("must return the plugin error but have:", err)
+		t.Fatal("Must return the plugin error but have:", err)
 	}
 }

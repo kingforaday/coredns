@@ -70,7 +70,7 @@ func (p Proxy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (
 
 	for {
 		start := time.Now()
-		reply := new(dns.Msg)
+		var reply *dns.Msg
 		var backendErr error
 
 		// Since Select() should give us "up" hosts, keep retrying
@@ -123,18 +123,10 @@ func (p Proxy) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (
 				// Note this keeps looping and trying until tryDuration is hit, at which point our client
 				// might be long gone...
 				if oe.Timeout() {
-					// Our upstream's upstream is problably messing up, continue with next selected
+					// Our upstream's upstream is probably messing up, continue with next selected
 					// host - which my be the *same* one as we don't set any uh.Fails.
 					continue
 				}
-			}
-
-			// If protocol is https_google we do the health checks wrong, i.e. we're healthchecking the wrong
-			// endpoint, hence the health check code below should not be executed. See issue #1202.
-			// This is an ugly hack and the thing requires a rethink. Possibly in conjunction with moving
-			// to the *forward* plugin.
-			if upstream.Exchanger().Protocol() == "https_google" {
-				continue
 			}
 
 			timeout := host.FailTimeout

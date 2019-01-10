@@ -4,7 +4,6 @@ import (
 	"context"
 
 	"github.com/coredns/coredns/plugin"
-	"github.com/coredns/coredns/plugin/pkg/dnsutil"
 	"github.com/coredns/coredns/request"
 
 	"github.com/miekg/dns"
@@ -17,13 +16,14 @@ func (k Kubernetes) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.M
 
 	m := new(dns.Msg)
 	m.SetReply(r)
-	m.Authoritative, m.RecursionAvailable = true, true
+	m.Authoritative = true
 
-	zone := plugin.Zones(k.Zones).Matches(state.Name())
+	qname := state.QName()
+	zone := plugin.Zones(k.Zones).Matches(qname)
 	if zone == "" {
 		return plugin.NextOrFailure(k.Name(), k.Next, ctx, w, r)
 	}
-
+	zone = qname[len(qname)-len(zone):] // maintain case of original query
 	state.Zone = zone
 
 	var (
@@ -66,6 +66,10 @@ func (k Kubernetes) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.M
 		if k.Fall.Through(state.Name()) {
 			return plugin.NextOrFailure(k.Name(), k.Next, ctx, w, r)
 		}
+		if !k.APIConn.HasSynced() {
+			// If we haven't synchronized with the kubernetes cluster, return server failure
+			return plugin.BackendError(&k, zone, dns.RcodeServerFailure, state, nil /* err */, opt)
+		}
 		return plugin.BackendError(&k, zone, dns.RcodeNameError, state, nil /* err */, opt)
 	}
 	if err != nil {
@@ -79,11 +83,6 @@ func (k Kubernetes) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.M
 	m.Answer = append(m.Answer, records...)
 	m.Extra = append(m.Extra, extra...)
 
-	// TODO(miek): get rid of this by not adding dups in the first place, dnsutil.Append()?
-	m = dnsutil.Dedup(m)
-
-	state.SizeAndDo(m)
-	m, _ = state.Scrub(m)
 	w.WriteMsg(m)
 	return dns.RcodeSuccess, nil
 }

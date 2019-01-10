@@ -1,6 +1,6 @@
 // Package forward implements a forwarding proxy. It caches an upstream net.Conn for some time, so if the same
 // client returns the upstream's Conn will be precached. Depending on how you benchmark this looks to be
-// 50% faster than just openening a new connection for every client. It works with UDP and TCP and uses
+// 50% faster than just opening a new connection for every client. It works with UDP and TCP and uses
 // inband healthchecking.
 package forward
 
@@ -11,11 +11,15 @@ import (
 	"time"
 
 	"github.com/coredns/coredns/plugin"
+	"github.com/coredns/coredns/plugin/debug"
+	clog "github.com/coredns/coredns/plugin/pkg/log"
 	"github.com/coredns/coredns/request"
 
 	"github.com/miekg/dns"
 	ot "github.com/opentracing/opentracing-go"
 )
+
+var log = clog.NewWithPlugin("forward")
 
 // Forward represents a plugin instance that can proxy requests to another (DNS) server. It has a list
 // of proxies each representing one upstream proxy.
@@ -32,14 +36,14 @@ type Forward struct {
 	maxfails      uint32
 	expire        time.Duration
 
-	forceTCP bool // also here for testing
+	opts options // also here for testing
 
 	Next plugin.Handler
 }
 
 // New returns a new Forward.
 func New() *Forward {
-	f := &Forward{maxfails: 2, tlsConfig: new(tls.Config), expire: defaultExpire, p: new(random), from: ".", hcInterval: hcDuration}
+	f := &Forward{maxfails: 2, tlsConfig: new(tls.Config), expire: defaultExpire, p: new(random), from: ".", hcInterval: hcInterval}
 	return f
 }
 
@@ -68,7 +72,7 @@ func (f *Forward) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg
 	var upstreamErr error
 	span = ot.SpanFromContext(ctx)
 	i := 0
-	list := f.list()
+	list := f.List()
 	deadline := time.Now().Add(defaultTimeout)
 
 	for time.Now().Before(deadline) {
@@ -102,9 +106,18 @@ func (f *Forward) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg
 			ret *dns.Msg
 			err error
 		)
+		opts := f.opts
 		for {
-			ret, err = proxy.connect(ctx, state, f.forceTCP, true)
-			if err != nil && err == errCachedClosed { // Remote side closed conn, can only happen with TCP.
+			ret, err = proxy.Connect(ctx, state, opts)
+			if err == nil {
+				break
+			}
+			if err == ErrCachedClosed { // Remote side closed conn, can only happen with TCP.
+				continue
+			}
+			// Retry with TCP if truncated and prefer_udp configured.
+			if ret != nil && ret.Truncated && !opts.forceTCP && f.opts.preferUDP {
+				opts.forceTCP = true
 				continue
 			}
 			break
@@ -114,7 +127,6 @@ func (f *Forward) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg
 			child.Finish()
 		}
 
-		ret, err = truncated(state, ret, err)
 		upstreamErr = err
 
 		if err != nil {
@@ -131,18 +143,14 @@ func (f *Forward) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg
 
 		// Check if the reply is correct; if not return FormErr.
 		if !state.Match(ret) {
+			debug.Hexdumpf(ret, "Wrong reply for id: %d, %s/%d", state.QName(), state.QType())
+
 			formerr := state.ErrorMessage(dns.RcodeFormatError)
 			w.WriteMsg(formerr)
 			return 0, nil
 		}
 
-		// When using force_tcp the upstream can send a message that is too big for
-		// the udp buffer, hence we need to truncate the message to at least make it
-		// fit the udp buffer.
-		ret, _ = state.Scrub(ret)
-
 		w.WriteMsg(ret)
-
 		return 0, nil
 	}
 
@@ -150,13 +158,11 @@ func (f *Forward) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg
 		return dns.RcodeServerFailure, upstreamErr
 	}
 
-	return dns.RcodeServerFailure, errNoHealthy
+	return dns.RcodeServerFailure, ErrNoHealthy
 }
 
 func (f *Forward) match(state request.Request) bool {
-	from := f.from
-
-	if !plugin.Name(from).Matches(state.Name()) || !f.isAllowedDomain(state.Name()) {
+	if !plugin.Name(f.from).Matches(state.Name()) || !f.isAllowedDomain(state.Name()) {
 		return false
 	}
 
@@ -176,14 +182,22 @@ func (f *Forward) isAllowedDomain(name string) bool {
 	return true
 }
 
+// ForceTCP returns if TCP is forced to be used even when the request comes in over UDP.
+func (f *Forward) ForceTCP() bool { return f.opts.forceTCP }
+
+// PreferUDP returns if UDP is preferred to be used even when the request comes in over TCP.
+func (f *Forward) PreferUDP() bool { return f.opts.preferUDP }
+
 // List returns a set of proxies to be used for this client depending on the policy in f.
-func (f *Forward) list() []*Proxy { return f.p.List(f.proxies) }
+func (f *Forward) List() []*Proxy { return f.p.List(f.proxies) }
 
 var (
-	errInvalidDomain = errors.New("invalid domain for forward")
-	errNoHealthy     = errors.New("no healthy proxies")
-	errNoForward     = errors.New("no forwarder defined")
-	errCachedClosed  = errors.New("cached connection was closed by peer")
+	// ErrNoHealthy means no healthy proxies left.
+	ErrNoHealthy = errors.New("no healthy proxies")
+	// ErrNoForward means no forwarder defined.
+	ErrNoForward = errors.New("no forwarder defined")
+	// ErrCachedClosed means cached connection was closed by peer.
+	ErrCachedClosed = errors.New("cached connection was closed by peer")
 )
 
 // policy tells forward what policy for selecting upstream it uses.
@@ -194,5 +208,11 @@ const (
 	roundRobinPolicy
 	sequentialPolicy
 )
+
+// options holds various options that can be set.
+type options struct {
+	forceTCP  bool
+	preferUDP bool
+}
 
 const defaultTimeout = 5 * time.Second

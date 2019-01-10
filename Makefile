@@ -3,54 +3,44 @@ GITCOMMIT:=$(shell git describe --dirty --always)
 BINARY:=coredns
 SYSTEM:=
 CHECKS:=check godeps
-VERBOSE:=-v
+BUILDOPTS:=-v
 GOPATH?=$(HOME)/go
-PRESUBMIT:=core coremain plugin
+PRESUBMIT:=core coremain plugin test request
+MAKEPWD:=$(dir $(realpath $(firstword $(MAKEFILE_LIST))))
+CGO_ENABLED:=0
 
+.PHONY: all
 all: coredns
 
 .PHONY: coredns
 coredns: $(CHECKS)
-	CGO_ENABLED=0 $(SYSTEM) go build $(VERBOSE) -ldflags="-s -w -X github.com/coredns/coredns/coremain.GitCommit=$(GITCOMMIT)" -o $(BINARY)
+	CGO_ENABLED=$(CGO_ENABLED) $(SYSTEM) go build $(BUILDOPTS) -ldflags="-s -w -X github.com/coredns/coredns/coremain.GitCommit=$(GITCOMMIT)" -o $(BINARY)
 
 .PHONY: check
-check: presubmit goimports core/zplugin.go core/dnsserver/zdirectives.go godeps linter
-
-.PHONY: test
-test: check
-	go test -race $(VERBOSE) ./test ./plugin/...
-
-.PHONY: testk8s
-testk8s: check
-	go test -race $(VERBOSE) -tags=k8s -run 'TestKubernetes' ./test ./plugin/kubernetes/...
+check: presubmit core/plugin/zplugin.go core/dnsserver/zdirectives.go godeps
 
 .PHONY: godeps
 godeps:
+	@ # Not vendoring these, so external plugins compile, avoiding:
+	@ # cannot use c (type *"github.com/mholt/caddy".Controller) as type
+	@ # *"github.com/coredns/coredns/vendor/github.com/mholt/caddy".Controller like errors.
 	(cd $(GOPATH)/src/github.com/mholt/caddy 2>/dev/null              && git checkout -q master 2>/dev/null || true)
 	(cd $(GOPATH)/src/github.com/miekg/dns 2>/dev/null                && git checkout -q master 2>/dev/null || true)
 	(cd $(GOPATH)/src/github.com/prometheus/client_golang 2>/dev/null && git checkout -q master 2>/dev/null || true)
-	(cd $(GOPATH)/src/golang.org/x/net 2>/dev/null                    && git checkout -q master 2>/dev/null || true)
-	(cd $(GOPATH)/src/golang.org/x/text 2>/dev/null                   && git checkout -q master 2>/dev/null || true)
 	go get -u github.com/mholt/caddy
 	go get -u github.com/miekg/dns
 	go get -u github.com/prometheus/client_golang/prometheus/promhttp
 	go get -u github.com/prometheus/client_golang/prometheus
-	go get -u golang.org/x/net/context
-	go get -u golang.org/x/text
-	(cd $(GOPATH)/src/github.com/mholt/caddy              && git checkout -q v0.10.11)
-	(cd $(GOPATH)/src/github.com/miekg/dns                && git checkout -q v1.0.5)
-	(cd $(GOPATH)/src/github.com/prometheus/client_golang && git checkout -q v0.8.0)
-	(cd $(GOPATH)/src/golang.org/x/net                    && git checkout -q release-branch.go1.10)
-	(cd $(GOPATH)/src/golang.org/x/text                   && git checkout -q v0.3.0)
-	# github.com/flynn/go-shlex is required by mholt/caddy at the moment
-	go get -u github.com/flynn/go-shlex
+	(cd $(GOPATH)/src/github.com/mholt/caddy              && git checkout -q v0.11.1)
+	(cd $(GOPATH)/src/github.com/miekg/dns                && git checkout -q v1.1.2)
+	(cd $(GOPATH)/src/github.com/prometheus/client_golang && git checkout -q v0.9.1)
 
 .PHONY: travis
-travis: check
+travis:
 ifeq ($(TEST_TYPE),core)
 	( cd request ; go test -v  -tags 'etcd' -race ./... )
 	( cd core ; go test -v  -tags 'etcd' -race  ./... )
-	( cd coremain go test -v  -tags 'etcd' -race ./... )
+	( cd coremain ; go test -v  -tags 'etcd' -race ./... )
 endif
 ifeq ($(TEST_TYPE),integration)
 	( cd test ; go test -v  -tags 'etcd' -race ./... )
@@ -71,29 +61,30 @@ ifeq ($(TEST_TYPE),coverage)
 	done
 endif
 
-core/zplugin.go core/dnsserver/zdirectives.go: plugin.cfg
+core/plugin/zplugin.go core/dnsserver/zdirectives.go: plugin.cfg
 	go generate coredns.go
 
 .PHONY: gen
 gen:
 	go generate coredns.go
 
-.PHONY: linter
-linter:
-	go get -u github.com/alecthomas/gometalinter
-	gometalinter --install golint
-	gometalinter --deadline=2m --disable-all --enable=golint --enable=vet --vendor --exclude=^pb/ ./...
-
-.PHONY: goimports
-goimports:
-	( gometalinter --deadline=2m --disable-all --enable=goimports --vendor --exclude=^pb/ ./... || true )
+.PHONY: pb
+pb:
+	$(MAKE) -C pb
 
 # Presubmit runs all scripts in .presubmit; any non 0 exit code will fail the build.
 .PHONY: presubmit
 presubmit:
-	@for pre in $(PWD)/.presubmit/* ; do "$$pre" $(PRESUBMIT); done
+	@for pre in $(MAKEPWD)/.presubmit/* ; do "$$pre" $(PRESUBMIT) || exit 1 ; done
 
 .PHONY: clean
 clean:
 	go clean
 	rm -f coredns
+
+.PHONY: dep-ensure
+dep-ensure:
+	dep version || go get -u github.com/golang/dep/cmd/dep
+	dep ensure -v
+	dep prune -v
+	find vendor -name '*_test.go' -delete
